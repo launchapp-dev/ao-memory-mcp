@@ -1,5 +1,5 @@
 {
-  "name": "ao-memory-mcp",
+  "name": "@launchapp-dev/ao-memory-mcp",
   "version": "1.0.0",
   "description": "MCP server for agent memory management — structured recall, cross-project patterns, and lifecycle management for ao-cli agents",
   "type": "module",
