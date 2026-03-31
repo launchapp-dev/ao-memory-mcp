@@ -4,12 +4,16 @@
   "description": "Cognitive memory MCP server for AI agents — semantic search, document RAG, knowledge graph, episodic memory, and hybrid retrieval",
   "type": "module",
   "bin": {
-    "ao-memory-mcp": "./src/server.ts"
+    "ao-memory-mcp": "./dist/server.js"
   },
+  "files": [
+    "dist",
+    "src/schema.sql"
+  ],
   "scripts": {
-    "start": "node --experimental-strip-types src/server.ts",
-    "migrate": "node --experimental-strip-types migrate.ts",
-    "build": "tsc --noEmit -p tsconfig.json"
+    "start": "node dist/server.js",
+    "build": "tsc && cp src/schema.sql dist/schema.sql",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "@huggingface/transformers": "^3.0.0",

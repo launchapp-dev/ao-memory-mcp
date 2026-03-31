@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
-import { contentHash, now, jsonResult, errorResult, touchAccess } from "../db.ts";
-import { embed, storeVector, deleteVector } from "../embeddings.ts";
+import { contentHash, now, jsonResult, errorResult, touchAccess } from "../db.js";
+import { embed, storeVector, deleteVector } from "../embeddings.js";
 
 export const storeTools = [
   {

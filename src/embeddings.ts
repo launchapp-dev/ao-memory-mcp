@@ -1,5 +1,5 @@
 import type Database from "better-sqlite3";
-import { isVecAvailable } from "./db.ts";
+import { isVecAvailable } from "./db.js";
 
 let extractor: any = null;
 

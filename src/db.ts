@@ -25,23 +25,16 @@ export function initDb(dbPath: string): Database.Database {
   return db;
 }
 
-export function initVec(db: Database.Database, dimensions: number) {
+export async function initVec(db: Database.Database, dimensions: number) {
   if (vecLoaded) return;
   try {
-    const sqliteVec = require("sqlite-vec");
-    sqliteVec.load(db);
+    const sqliteVec = await import("sqlite-vec");
+    const load = sqliteVec.load || sqliteVec.default?.load;
+    if (load) load(db);
     vecLoaded = true;
-  } catch {
-    try {
-      // Fallback: the package might export differently
-      const mod = require("sqlite-vec");
-      if (mod.default?.load) mod.default.load(db);
-      else if (mod.load) mod.load(db);
-      vecLoaded = true;
-    } catch (e) {
-      console.error("[ao-memory] sqlite-vec not available, vector search disabled");
-      return;
-    }
+  } catch (e) {
+    console.error("[ao-memory] sqlite-vec not available, vector search disabled");
+    return;
   }
 
   db.exec(`

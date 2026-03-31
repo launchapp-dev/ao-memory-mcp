@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
-import { now, jsonResult, errorResult, chunkText } from "../db.ts";
-import { embed, storeVector, deleteVector, hybridSearch } from "../embeddings.ts";
+import { now, jsonResult, errorResult, chunkText } from "../db.js";
+import { embed, storeVector, deleteVector, hybridSearch } from "../embeddings.js";
 
 export const documentTools = [
   {

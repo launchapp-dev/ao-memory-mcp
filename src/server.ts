@@ -1,20 +1,20 @@
-#!/usr/bin/env node --experimental-strip-types
+#!/usr/bin/env node
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
   ListToolsRequestSchema,
   CallToolRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { resolveDbPath, initDb, initVec, errorResult } from "./db.ts";
-import { getDimensions } from "./embeddings.ts";
-import { storeTools, handleStore } from "./tools/store.ts";
-import { recallTools, handleRecall } from "./tools/recall.ts";
-import { statsTools, handleStats } from "./tools/stats.ts";
-import { contextTools, handleContext } from "./tools/context.ts";
-import { summarizeTools, handleSummarize } from "./tools/summarize.ts";
-import { documentTools, handleDocuments } from "./tools/documents.ts";
-import { knowledgeTools, handleKnowledge } from "./tools/knowledge.ts";
-import { episodeTools, handleEpisodes } from "./tools/episodes.ts";
+import { resolveDbPath, initDb, initVec, errorResult } from "./db.js";
+import { getDimensions } from "./embeddings.js";
+import { storeTools, handleStore } from "./tools/store.js";
+import { recallTools, handleRecall } from "./tools/recall.js";
+import { statsTools, handleStats } from "./tools/stats.js";
+import { contextTools, handleContext } from "./tools/context.js";
+import { summarizeTools, handleSummarize } from "./tools/summarize.js";
+import { documentTools, handleDocuments } from "./tools/documents.js";
+import { knowledgeTools, handleKnowledge } from "./tools/knowledge.js";
+import { episodeTools, handleEpisodes } from "./tools/episodes.js";
 
 // Parse CLI args
 const args = process.argv.slice(2);
@@ -24,7 +24,7 @@ for (let i = 0; i < args.length; i++) {
 }
 
 const db = initDb(resolveDbPath(dbPath));
-initVec(db, getDimensions());
+await initVec(db, getDimensions());
 
 const allTools = [
   ...storeTools,

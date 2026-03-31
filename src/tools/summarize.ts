@@ -1,5 +1,5 @@
 import type Database from "better-sqlite3";
-import { now, jsonResult, errorResult } from "../db.ts";
+import { now, jsonResult, errorResult } from "../db.js";
 
 export const summarizeTools = [
   {

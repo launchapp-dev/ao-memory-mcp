@@ -1,5 +1,6 @@
 import type Database from "better-sqlite3";
-import { now, jsonResult, errorResult } from "../db.ts";
+import { createHash } from "node:crypto";
+import { now, jsonResult, errorResult } from "../db.js";
 
 export const episodeTools = [
   {
@@ -105,7 +106,7 @@ function episodeSummarize(db: Database.Database, args: any) {
     args.summary,
     JSON.stringify({ session_id: args.session_id }),
     ts, ts, ts,
-    require("node:crypto").createHash("sha256").update(`episode\0${args.session_id}\0${args.summary}`).digest("hex")
+    createHash("sha256").update(`episode\0${args.session_id}\0${args.summary}`).digest("hex")
   );
 
   return jsonResult({ episodes_updated: result.changes, session_id: args.session_id });

@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
-import { jsonResult, errorResult, touchAccess } from "../db.ts";
-import { embed, hybridSearch, searchVectors } from "../embeddings.ts";
+import { jsonResult, errorResult, touchAccess } from "../db.js";
+import { embed, hybridSearch, searchVectors } from "../embeddings.js";
 
 export const recallTools = [
   {
