@@ -1,52 +1,55 @@
 import type Database from "better-sqlite3";
-import { jsonResult, errorResult } from "../db.ts";
+import { jsonResult, errorResult, touchAccess } from "../db.ts";
+import { embed, hybridSearch, searchVectors } from "../embeddings.ts";
 
 export const recallTools = [
   {
     name: "memory.recall",
     description:
-      "Query memory entries with structured filters. Returns entries sorted by date. Default: 50 most recent active entries.",
+      "Recall memories with structured filters. Supports filtering by type, scope, namespace, agent role, tags, date range. Returns entries sorted by date.",
     inputSchema: {
       type: "object" as const,
       properties: {
+        memory_type: { type: "string", enum: ["semantic", "episodic", "procedural"], description: "Filter by type" },
+        scope: { type: "string", description: "Filter by scope" },
+        namespace: { type: "string", description: "Filter by namespace (project name, etc.)" },
         agent_role: { type: "string", description: "Filter by agent role" },
-        project: { type: "string", description: "Filter by project" },
-        entry_type: { type: "string", description: "Filter by entry type" },
         task_id: { type: "string", description: "Filter by task ID" },
-        status: { type: "string", enum: ["active", "summarized", "archived"], description: "Filter by status (default: active)" },
-        date_from: { type: "string", description: "Entries from this ISO date" },
-        date_to: { type: "string", description: "Entries up to this ISO date" },
-        tags: { type: "array", items: { type: "string" }, description: "Filter by tags (must have ALL specified)" },
+        status: { type: "string", enum: ["active", "summarized", "archived"], description: "Default: active" },
+        date_from: { type: "string", description: "From ISO date" },
+        date_to: { type: "string", description: "To ISO date" },
+        tags: { type: "array", items: { type: "string" }, description: "Must have ALL specified tags" },
         limit: { type: "number", description: "Max results (default 50)" },
-        offset: { type: "number", description: "Pagination offset (default 0)" },
-        order: { type: "string", enum: ["newest", "oldest"], description: "Sort order (default: newest)" },
+        offset: { type: "number", description: "Pagination offset" },
+        order: { type: "string", enum: ["newest", "oldest", "most_accessed", "highest_confidence"], description: "Sort order" },
       },
     },
   },
   {
     name: "memory.search",
     description:
-      "Full-text search across all memory entries. Uses FTS5 for fast matching.",
+      "Hybrid semantic + keyword search across all memories. Uses vector similarity and FTS5 together for best results.",
     inputSchema: {
       type: "object" as const,
       properties: {
-        query: { type: "string", description: "Search query (supports FTS5 syntax)" },
+        query: { type: "string", description: "Natural language search query" },
+        memory_type: { type: "string", description: "Restrict to type" },
+        namespace: { type: "string", description: "Restrict to namespace" },
         agent_role: { type: "string", description: "Restrict to agent role" },
-        project: { type: "string", description: "Restrict to project" },
-        entry_type: { type: "string", description: "Restrict to entry type" },
         status: { type: "string", description: "Restrict to status" },
-        limit: { type: "number", description: "Max results (default 20)" },
+        limit: { type: "number", description: "Max results (default 10)" },
+        alpha: { type: "number", description: "Semantic vs keyword weight: 0=all keyword, 1=all semantic (default 0.5)" },
       },
       required: ["query"],
     },
   },
   {
     name: "memory.get",
-    description: "Get a single memory entry by ID.",
+    description: "Get a single memory by ID. Updates access tracking.",
     inputSchema: {
       type: "object" as const,
       properties: {
-        id: { type: "number", description: "Memory entry ID" },
+        id: { type: "number", description: "Memory ID" },
       },
       required: ["id"],
     },
@@ -63,16 +66,15 @@ export function handleRecall(db: Database.Database, name: string, args: any) {
 function memoryRecall(db: Database.Database, args: any) {
   const conditions: string[] = [];
   const vals: any[] = [];
-  const status = args.status || "active";
 
-  conditions.push("status = ?"); vals.push(status);
+  conditions.push("status = ?"); vals.push(args.status || "active");
+  if (args.memory_type) { conditions.push("memory_type = ?"); vals.push(args.memory_type); }
+  if (args.scope) { conditions.push("scope = ?"); vals.push(args.scope); }
+  if (args.namespace) { conditions.push("namespace = ?"); vals.push(args.namespace); }
   if (args.agent_role) { conditions.push("agent_role = ?"); vals.push(args.agent_role); }
-  if (args.project) { conditions.push("project = ?"); vals.push(args.project); }
-  if (args.entry_type) { conditions.push("entry_type = ?"); vals.push(args.entry_type); }
   if (args.task_id) { conditions.push("task_id = ?"); vals.push(args.task_id); }
   if (args.date_from) { conditions.push("occurred_at >= ?"); vals.push(args.date_from); }
   if (args.date_to) { conditions.push("occurred_at <= ?"); vals.push(args.date_to); }
-
   if (args.tags?.length) {
     for (const tag of args.tags) {
       conditions.push("EXISTS (SELECT 1 FROM json_each(tags) WHERE json_each.value = ?)");
@@ -80,45 +82,86 @@ function memoryRecall(db: Database.Database, args: any) {
     }
   }
 
-  const order = args.order === "oldest" ? "ASC" : "DESC";
+  const orderMap: Record<string, string> = {
+    newest: "occurred_at DESC",
+    oldest: "occurred_at ASC",
+    most_accessed: "access_count DESC",
+    highest_confidence: "confidence DESC",
+  };
+  const order = orderMap[args.order || "newest"] || "occurred_at DESC";
   const limit = args.limit || 50;
   const offset = args.offset || 0;
 
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
   const rows = db.prepare(
-    `SELECT * FROM memory_entries ${where} ORDER BY occurred_at ${order} LIMIT ? OFFSET ?`
+    `SELECT * FROM memories ${where} ORDER BY ${order} LIMIT ? OFFSET ?`
   ).all(...vals, limit, offset);
 
-  return jsonResult({ entries: rows, count: rows.length });
+  return jsonResult({ memories: rows, count: rows.length });
 }
 
-function memorySearch(db: Database.Database, args: any) {
-  const conditions: string[] = [];
-  const vals: any[] = [];
+async function memorySearch(db: Database.Database, args: any) {
+  const limit = args.limit || 10;
+  const alpha = args.alpha ?? 0.5;
 
-  if (args.agent_role) { conditions.push("e.agent_role = ?"); vals.push(args.agent_role); }
-  if (args.project) { conditions.push("e.project = ?"); vals.push(args.project); }
-  if (args.entry_type) { conditions.push("e.entry_type = ?"); vals.push(args.entry_type); }
-  if (args.status) { conditions.push("e.status = ?"); vals.push(args.status); }
+  // Get embedding for query
+  let queryEmbedding: Float32Array;
+  try {
+    queryEmbedding = await embed(args.query, true);
+  } catch {
+    // Fallback to FTS-only
+    return ftsOnlySearch(db, args);
+  }
 
-  const extraWhere = conditions.length ? `AND ${conditions.join(" AND ")}` : "";
-  const limit = args.limit || 20;
+  const results = hybridSearch(db, "memories_fts", "vec_memories", args.query, queryEmbedding, limit * 3, alpha);
 
+  if (results.length === 0) return jsonResult({ memories: [], count: 0 });
+
+  // Fetch full rows and apply filters
+  const ids = results.map(r => r.rowid);
+  const scoreMap = new Map(results.map(r => [r.rowid, r.score]));
+
+  const conditions: string[] = [`id IN (${ids.map(() => "?").join(",")})`];
+  const vals: any[] = [...ids];
+
+  if (args.memory_type) { conditions.push("memory_type = ?"); vals.push(args.memory_type); }
+  if (args.namespace) { conditions.push("namespace = ?"); vals.push(args.namespace); }
+  if (args.agent_role) { conditions.push("agent_role = ?"); vals.push(args.agent_role); }
+  if (args.status) { conditions.push("status = ?"); vals.push(args.status); }
+
+  const rows = db.prepare(
+    `SELECT * FROM memories WHERE ${conditions.join(" AND ")}`
+  ).all(...vals) as any[];
+
+  // Sort by hybrid score and limit
+  const scored = rows
+    .map(r => ({ ...r, _score: scoreMap.get(r.id) || 0 }))
+    .sort((a, b) => b._score - a._score)
+    .slice(0, limit);
+
+  // Touch access for returned results
+  for (const row of scored) touchAccess(db, row.id);
+
+  return jsonResult({ memories: scored, count: scored.length });
+}
+
+function ftsOnlySearch(db: Database.Database, args: any) {
+  const limit = args.limit || 10;
   const rows = db.prepare(`
-    SELECT e.*, snippet(memory_fts, 0, '<mark>', '</mark>', '...', 32) as title_snippet,
-           snippet(memory_fts, 1, '<mark>', '</mark>', '...', 64) as body_snippet
-    FROM memory_fts f
-    JOIN memory_entries e ON e.id = f.rowid
-    WHERE memory_fts MATCH ? ${extraWhere}
-    ORDER BY rank
-    LIMIT ?
-  `).all(args.query, ...vals, limit);
+    SELECT m.*, snippet(memories_fts, 0, '<mark>', '</mark>', '...', 32) as title_snippet,
+           snippet(memories_fts, 1, '<mark>', '</mark>', '...', 64) as content_snippet
+    FROM memories_fts f
+    JOIN memories m ON m.id = f.rowid
+    WHERE memories_fts MATCH ?
+    ORDER BY rank LIMIT ?
+  `).all(args.query, limit);
 
-  return jsonResult({ entries: rows, count: rows.length });
+  return jsonResult({ memories: rows, count: rows.length, mode: "keyword_only" });
 }
 
 function memoryGet(db: Database.Database, args: any) {
-  const entry = db.prepare("SELECT * FROM memory_entries WHERE id = ?").get(args.id);
-  if (!entry) return errorResult(`Entry ${args.id} not found`);
+  const entry = db.prepare("SELECT * FROM memories WHERE id = ?").get(args.id) as any;
+  if (!entry) return errorResult(`Memory ${args.id} not found`);
+  touchAccess(db, args.id);
   return jsonResult(entry);
 }

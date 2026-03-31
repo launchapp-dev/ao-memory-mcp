@@ -5,15 +5,15 @@ export const contextTools = [
   {
     name: "memory.context",
     description:
-      "Agent boot tool — call at the start of each run to load relevant memory. Returns recent entries, active decisions, cross-project patterns, summaries, and a summarization_needed flag.",
+      "Agent boot tool — call at the start of each run to load all relevant memory. Returns recent memories, active decisions, related entities, episode summaries, and document count. Scoped by namespace and agent role.",
     inputSchema: {
       type: "object" as const,
       properties: {
+        namespace: { type: "string", description: "Project/scope to load context for" },
         agent_role: { type: "string", description: "Agent role requesting context" },
-        project: { type: "string", description: "Project the agent is working on" },
         limit: { type: "number", description: "Max entries per section (default 10)" },
       },
-      required: ["agent_role", "project"],
+      required: ["namespace"],
     },
   },
 ];
@@ -24,53 +24,82 @@ export function handleContext(db: Database.Database, name: string, args: any) {
 }
 
 function memoryContext(db: Database.Database, args: any) {
-  const { agent_role, project } = args;
+  const { namespace, agent_role } = args;
   const limit = args.limit || 10;
 
-  const recentEntries = db.prepare(`
-    SELECT * FROM memory_entries
-    WHERE agent_role = ? AND project = ? AND status = 'active'
+  // Recent memories for this agent+namespace
+  const recentMemories = db.prepare(`
+    SELECT * FROM memories
+    WHERE namespace = ? ${agent_role ? "AND agent_role = ?" : ""}
+      AND status = 'active'
     ORDER BY occurred_at DESC LIMIT ?
-  `).all(agent_role, project, limit);
+  `).all(...(agent_role ? [namespace, agent_role, limit] : [namespace, limit]));
 
-  const activeDecisions = db.prepare(`
-    SELECT * FROM memory_entries
-    WHERE project = ? AND entry_type = 'decision' AND status = 'active'
-    ORDER BY occurred_at DESC LIMIT ?
-  `).all(project, limit);
+  // Active semantic memories (facts/knowledge) for this namespace
+  const knowledge = db.prepare(`
+    SELECT * FROM memories
+    WHERE namespace = ? AND memory_type = 'semantic' AND status = 'active'
+    ORDER BY confidence DESC, access_count DESC LIMIT ?
+  `).all(namespace, limit);
 
-  const activePatterns = db.prepare(`
-    SELECT * FROM memory_patterns
-    WHERE status = 'active'
-      AND EXISTS (SELECT 1 FROM json_each(projects) WHERE json_each.value = ?)
-    ORDER BY last_seen DESC LIMIT ?
-  `).all(project, limit);
+  // Active procedural memories (how-to) for this namespace
+  const procedures = db.prepare(`
+    SELECT * FROM memories
+    WHERE namespace = ? AND memory_type = 'procedural' AND status = 'active'
+    ORDER BY access_count DESC LIMIT ?
+  `).all(namespace, limit);
 
-  const recentSummaries = db.prepare(`
-    SELECT * FROM memory_summaries
-    WHERE agent_role = ? AND project = ?
-    ORDER BY created_at DESC LIMIT 5
-  `).all(agent_role, project);
+  // Related entities
+  const entities = db.prepare(`
+    SELECT e.*, (SELECT COUNT(*) FROM relations r WHERE r.source_entity_id = e.id OR r.target_entity_id = e.id) as relation_count
+    FROM entities e
+    WHERE e.namespace = ?
+    ORDER BY relation_count DESC LIMIT ?
+  `).all(namespace, limit);
 
-  const crossProjectAlerts = db.prepare(`
-    SELECT * FROM memory_patterns
-    WHERE status = 'active' AND occurrence_count >= 3
-    ORDER BY last_seen DESC LIMIT 5
+  // Recent episode summaries
+  const episodeSummaries = db.prepare(`
+    SELECT DISTINCT session_id, summary, MAX(created_at) as last_at
+    FROM episodes
+    WHERE namespace = ? AND summary IS NOT NULL
+    GROUP BY session_id
+    ORDER BY last_at DESC LIMIT 5
+  `).all(namespace);
+
+  // Document count
+  const docCount = (db.prepare(
+    "SELECT COUNT(*) as count FROM documents WHERE namespace = ?"
+  ).get(namespace) as any).count;
+
+  // Global memories (cross-project)
+  const globalMemories = db.prepare(`
+    SELECT * FROM memories
+    WHERE scope = 'global' AND status = 'active'
+    ORDER BY confidence DESC, occurred_at DESC LIMIT 5
   `).all();
 
-  // Check if summarization is needed: 20+ active entries older than 3 days
+  // Check if summarization needed
   const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
   const staleCount = (db.prepare(`
-    SELECT COUNT(*) as count FROM memory_entries
-    WHERE agent_role = ? AND project = ? AND status = 'active' AND occurred_at < ?
-  `).get(agent_role, project, threeDaysAgo) as any).count;
+    SELECT COUNT(*) as count FROM memories
+    WHERE namespace = ? ${agent_role ? "AND agent_role = ?" : ""}
+      AND status = 'active' AND occurred_at < ?
+  `).get(...(agent_role ? [namespace, agent_role, threeDaysAgo] : [namespace, threeDaysAgo])) as any).count;
+
+  // Stats
+  const totalMemories = (db.prepare(
+    "SELECT COUNT(*) as count FROM memories WHERE namespace = ? AND status = 'active'"
+  ).get(namespace) as any).count;
 
   return jsonResult({
-    recent_entries: recentEntries,
-    active_decisions: activeDecisions,
-    active_patterns: activePatterns,
-    recent_summaries: recentSummaries,
-    cross_project_alerts: crossProjectAlerts,
+    recent_memories: recentMemories,
+    knowledge,
+    procedures,
+    entities,
+    episode_summaries: episodeSummaries,
+    global_memories: globalMemories,
+    document_count: docCount,
+    total_active_memories: totalMemories,
     summarization_needed: staleCount >= 20,
     stale_entry_count: staleCount,
   });

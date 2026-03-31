@@ -1,7 +1,7 @@
 {
   "name": "@launchapp-dev/ao-memory-mcp",
-  "version": "1.0.0",
-  "description": "MCP server for agent memory management — structured recall, cross-project patterns, and lifecycle management for ao-cli agents",
+  "version": "2.0.0",
+  "description": "Cognitive memory MCP server for AI agents — semantic search, document RAG, knowledge graph, episodic memory, and hybrid retrieval",
   "type": "module",
   "bin": {
     "ao-memory-mcp": "./src/server.ts"
@@ -12,8 +12,10 @@
     "build": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@huggingface/transformers": "^3.0.0",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "better-sqlite3": "^11.0.0",
+    "sqlite-vec": "^0.1.0",
     "zod": "^3.22.0"
   },
   "devDependencies": {

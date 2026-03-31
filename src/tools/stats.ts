@@ -4,12 +4,11 @@ import { jsonResult } from "../db.ts";
 export const statsTools = [
   {
     name: "memory.stats",
-    description:
-      "Get aggregate statistics about memory entries. Optionally filter by project or agent role.",
+    description: "Get aggregate statistics across all memory types.",
     inputSchema: {
       type: "object" as const,
       properties: {
-        project: { type: "string", description: "Filter by project" },
+        namespace: { type: "string", description: "Filter by namespace" },
         agent_role: { type: "string", description: "Filter by agent role" },
       },
     },
@@ -24,51 +23,29 @@ export function handleStats(db: Database.Database, name: string, args: any) {
 function memoryStats(db: Database.Database, args: any) {
   const conditions: string[] = [];
   const vals: any[] = [];
-
-  if (args.project) { conditions.push("project = ?"); vals.push(args.project); }
+  if (args.namespace) { conditions.push("namespace = ?"); vals.push(args.namespace); }
   if (args.agent_role) { conditions.push("agent_role = ?"); vals.push(args.agent_role); }
-
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
 
-  const total = (db.prepare(`SELECT COUNT(*) as count FROM memory_entries ${where}`).get(...vals) as any).count;
+  const totalMemories = (db.prepare(`SELECT COUNT(*) as c FROM memories ${where}`).get(...vals) as any).c;
+  const byType = db.prepare(`SELECT memory_type, COUNT(*) as count FROM memories ${where} GROUP BY memory_type`).all(...vals);
+  const byStatus = db.prepare(`SELECT status, COUNT(*) as count FROM memories ${where} GROUP BY status`).all(...vals);
+  const byScope = db.prepare(`SELECT scope, COUNT(*) as count FROM memories ${where} GROUP BY scope`).all(...vals);
+  const byRole = db.prepare(`SELECT agent_role, COUNT(*) as count FROM memories ${where} GROUP BY agent_role`).all(...vals);
+  const byNamespace = db.prepare(`SELECT namespace, COUNT(*) as count FROM memories ${where} GROUP BY namespace ORDER BY count DESC LIMIT 20`).all(...vals);
 
-  const byType = db.prepare(
-    `SELECT entry_type, COUNT(*) as count FROM memory_entries ${where} GROUP BY entry_type ORDER BY count DESC`
-  ).all(...vals);
+  const dateRange = db.prepare(`SELECT MIN(occurred_at) as oldest, MAX(occurred_at) as newest FROM memories ${where}`).get(...vals) as any;
 
-  const byStatus = db.prepare(
-    `SELECT status, COUNT(*) as count FROM memory_entries ${where} GROUP BY status ORDER BY count DESC`
-  ).all(...vals);
-
-  const byRole = db.prepare(
-    `SELECT agent_role, COUNT(*) as count FROM memory_entries ${where} GROUP BY agent_role ORDER BY count DESC`
-  ).all(...vals);
-
-  const byProject = db.prepare(
-    `SELECT project, COUNT(*) as count FROM memory_entries ${where} GROUP BY project ORDER BY count DESC`
-  ).all(...vals);
-
-  const dateRange = db.prepare(
-    `SELECT MIN(occurred_at) as oldest, MAX(occurred_at) as newest FROM memory_entries ${where}`
-  ).get(...vals) as any;
-
-  const summaryCount = (db.prepare(
-    `SELECT COUNT(*) as count FROM memory_summaries ${where.replace("entry_type", "entry_type")}`
-  ).get(...vals) as any).count;
-
-  const patternCount = (db.prepare(
-    `SELECT COUNT(*) as count FROM memory_patterns WHERE status = 'active'`
-  ).get() as any).count;
+  const totalDocs = (db.prepare("SELECT COUNT(*) as c FROM documents").get() as any).c;
+  const totalChunks = (db.prepare("SELECT COUNT(*) as c FROM chunks").get() as any).c;
+  const totalEntities = (db.prepare("SELECT COUNT(*) as c FROM entities").get() as any).c;
+  const totalRelations = (db.prepare("SELECT COUNT(*) as c FROM relations").get() as any).c;
+  const totalEpisodes = (db.prepare("SELECT COUNT(*) as c FROM episodes").get() as any).c;
 
   return jsonResult({
-    total_entries: total,
-    total_summaries: summaryCount,
-    active_patterns: patternCount,
-    oldest_entry: dateRange?.oldest,
-    newest_entry: dateRange?.newest,
-    by_type: byType,
-    by_status: byStatus,
-    by_role: byRole,
-    by_project: byProject,
+    memories: { total: totalMemories, by_type: byType, by_status: byStatus, by_scope: byScope, by_role: byRole, by_namespace: byNamespace, oldest: dateRange?.oldest, newest: dateRange?.newest },
+    documents: { total: totalDocs, total_chunks: totalChunks },
+    knowledge_graph: { entities: totalEntities, relations: totalRelations },
+    episodes: { total: totalEpisodes },
   });
 }
